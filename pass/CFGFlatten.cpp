@@ -60,8 +60,6 @@ static bool flatten(Function &F) {
   for (auto &B : F) { // make_early_inc_range not needed since no mutation is done
     if (&B == EntryBlock || &B == dispatcher) continue; // Skip entry block
 
-    if (isa<ReturnInst>(B) || isa<UnreachableInst>(B)) continue; // No successors
-
     // Create case variable
     ConstantInt *swIdx = dyn_cast<ConstantInt>(ConstantInt::get(i32_type, idx));
 
