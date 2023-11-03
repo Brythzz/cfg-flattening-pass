@@ -4,6 +4,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/Transforms/Utils/LowerSwitch.h"
 
 #define DEBUG_TYPE "flatten-cfg"
 STATISTIC(Flattened, "Number of functions flattened");
@@ -45,7 +46,7 @@ static bool flatten(Function &F) {
     Type::getInt32Ty(F.getContext()),
     0,
     "switchVar",
-    F.getEntryBlock().getFirstNonPHI()
+    F.getEntryBlock().getFirstNonPHI() // PHI nodes must be at the beginning
   );
 
   // Create switch dispatcher block
@@ -57,8 +58,8 @@ static bool flatten(Function &F) {
   BasicBlock *EntryBlock = splitEntryBlock(&F.getEntryBlock());
 
   int idx = 0;
-  for (auto &B : F) { // make_early_inc_range not needed since no mutation is done
-    if (&B == EntryBlock || &B == dispatcher) continue; // Skip entry block
+  for (auto &B : F) {
+    if (&B == EntryBlock || &B == dispatcher) continue; // Skip entry and dispatcher blocks
 
     // Create case variable
     ConstantInt *swIdx = dyn_cast<ConstantInt>(ConstantInt::get(i32_type, idx));
@@ -69,7 +70,7 @@ static bool flatten(Function &F) {
 
   if (idx <= 1) return false; // Function too small to be flattened
 
-  // Update branches to set stateVariable conditionally
+  // Update branches to set switchVar conditionally
   // Unconditionally branch to the dispatcher block
   for (auto &B : F) {
     ConstantInt *caseValue = sw->findCaseDest(&B);
@@ -77,34 +78,30 @@ static bool flatten(Function &F) {
 
     Instruction *term = B.getTerminator();
 
-    if (term->getNumSuccessors() == 1) {
+    if (term->getNumSuccessors() == 0) continue; // Return block
+
+    if (term->getNumSuccessors() == 1) { // Unconditional jump
       BasicBlock *succ = term->getSuccessor(0);
 
       ConstantInt *idx = sw->findCaseDest(succ);
       new StoreInst(idx, switchVar, term);
-
-      term->eraseFromParent();
-      BranchInst::Create(dispatcher, &B);
     }
 
-    if (term->getNumSuccessors() == 2) {
+    else if (term->getNumSuccessors() == 2) { // Conditional jump
       ConstantInt *idxTrue = sw->findCaseDest(term->getSuccessor(0));
       ConstantInt *idxFalse = sw->findCaseDest(term->getSuccessor(1));
 
       BranchInst *br = cast<BranchInst>(term);
       SelectInst *sl = SelectInst::Create(br->getCondition(), idxTrue, idxFalse, "", term);
       new StoreInst(sl, switchVar, term); // switchVar = cond ? idxTrue : idxFalse
-
-      term->eraseFromParent();
-      BranchInst::Create(dispatcher, &B);
     }
 
-    // Do we need to handle switches?
+    term->eraseFromParent();
+    BranchInst::Create(dispatcher, &B);
   }
 
   return true;
 }
-
 
 namespace {
 
@@ -115,6 +112,12 @@ PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
 
       errs() << "Trying to flatten " << F.getName() << "!\n";
 
+      // Remove all switch statements
+      LowerSwitchPass *lower = new LowerSwitchPass();
+      FunctionAnalysisManager &FM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+      lower->run(F, FM);
+
+      // Run our pass logic
       if (flatten(F)) Flattened++;
     }
 
