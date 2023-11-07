@@ -1,4 +1,4 @@
-cfg: gen_llvm gen_cfg
+gen_original_cfg: gen_llvm gen_cfg
 
 gen_llvm: something.c
 	clang -S -emit-llvm -Xclang -disable-O0-optnone something.c
