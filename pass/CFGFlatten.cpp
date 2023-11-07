@@ -121,9 +121,7 @@ PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
       if (flatten(F)) Flattened++;
     }
 
-    return Flattened == 0
-      ? PreservedAnalyses::all()
-      : PreservedAnalyses::none();
+    return PreservedAnalyses::none();
   };
 };
 
