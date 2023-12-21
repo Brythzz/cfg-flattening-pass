@@ -37,8 +37,9 @@ static BasicBlock* splitEntryBlock(BasicBlock *entryBlock) {
 
 /**
 * @brief Iterates over basic blocks and dispatches them in a switch statement
+* @return LoadInst corresponding to the switchVar
 */
-static bool flatten(Function &F) {
+static LoadInst* flatten(Function &F, std::vector<LoadInst*> oldLoads) {
   Type *i32_type = Type::getInt32Ty(F.getContext());
 
   // Create switch variable on the stack
@@ -54,6 +55,11 @@ static bool flatten(Function &F) {
   LoadInst *load = new LoadInst(i32_type, switchVar, "switchVar", dispatcher);
   SwitchInst *sw = SwitchInst::Create(load, dispatcher, 0, dispatcher);
 
+  // Move older loadInsts to the new dispatcher to avoid scope issues
+  for (auto &oldLoad : oldLoads) {
+    oldLoad->moveBefore(dispatcher->getFirstNonPHI());
+  }
+
   // Add all non-terminating basic blocks to the switch
   BasicBlock *EntryBlock = splitEntryBlock(&F.getEntryBlock());
 
@@ -68,7 +74,7 @@ static bool flatten(Function &F) {
     idx++;
   }
 
-  if (idx <= 1) return false; // Function too small to be flattened
+  if (idx <= 1) return NULL; // Function too small to be flattened
 
   // Update branches to set switchVar conditionally
   // Unconditionally branch to the dispatcher block
@@ -100,25 +106,38 @@ static bool flatten(Function &F) {
     BranchInst::Create(dispatcher, &B);
   }
 
-  return true;
+  return load;
 }
 
 namespace {
 
 struct FlattenCFGPass : public PassInfoMixin<FlattenCFGPass> {
 PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
+
+    // Create LowerSwitchPass instance
+    LowerSwitchPass *lower = new LowerSwitchPass();
+    FunctionAnalysisManager &FM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+
+    // loadInsts created by flattening iterations
+    std::vector<LoadInst*> loadInstructions;
+
     for (auto &F : M.functions()) {
       if (F.empty()) continue;
 
-      errs() << "Trying to flatten " << F.getName() << "!\n";
+      for(int i=0; i < 4; i++) {
+        errs() << "Running flatten on "<< F.getName() << "(iteration: " << i << ")\n";
 
-      // Remove all switch statements
-      LowerSwitchPass *lower = new LowerSwitchPass();
-      FunctionAnalysisManager &FM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-      lower->run(F, FM);
+        // Remove all switch statements
+        lower->run(F, FM);
 
-      // Run our pass logic
-      if (flatten(F)) Flattened++;
+        // Run our pass logic
+        LoadInst * load = flatten(F, loadInstructions);
+        if (load != NULL) {
+          loadInstructions.push_back(load);
+          Flattened++;
+        }
+        else break;
+      }
     }
 
     return PreservedAnalyses::none();
@@ -129,15 +148,15 @@ PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
-    return {
-        .APIVersion = LLVM_PLUGIN_API_VERSION,
-        .PluginName = "CFGPass",
-        .PluginVersion = "v0.1",
-        .RegisterPassBuilderCallbacks = [](PassBuilder &PB) {
-            PB.registerPipelineStartEPCallback(
-                [](ModulePassManager &MPM, OptimizationLevel Level) {
-                    MPM.addPass(FlattenCFGPass());
-                });
-        }
-    };
+  return {
+    .APIVersion = LLVM_PLUGIN_API_VERSION,
+    .PluginName = "CFGPass",
+    .PluginVersion = "v0.1",
+    .RegisterPassBuilderCallbacks = [](PassBuilder &PB) {
+      PB.registerPipelineStartEPCallback(
+        [](ModulePassManager &MPM, OptimizationLevel Level) {
+          MPM.addPass(FlattenCFGPass());
+        });
+    }
+  };
 }
