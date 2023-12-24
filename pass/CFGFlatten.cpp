@@ -1,10 +1,8 @@
-#include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/Transforms/Utils/LowerSwitch.h"
+#include "llvm/Transforms/Scalar/Reg2Mem.h"
 
 #define DEBUG_TYPE "flatten-cfg"
 STATISTIC(Flattened, "Number of functions flattened");
@@ -15,31 +13,24 @@ using namespace llvm;
 * @brief Splits the entry block if it ends with a conditional branch
 * to make it unconditionally jump to the dispatcher
 */
-static BasicBlock* splitEntryBlock(BasicBlock *entryBlock) {
+static void splitEntryBlock(BasicBlock *entryBlock) {
   Instruction *term = entryBlock->getTerminator();
+  BranchInst *br = dyn_cast<BranchInst>(term);
 
-  if (BranchInst *br = dyn_cast<BranchInst>(term)) {
-    if (br->isConditional()) {
-      Value *cond = br->getCondition();
+  if (br && br->isConditional()) {
+    Value *cond = br->getCondition();
 
-      if (Instruction *inst = dyn_cast<Instruction>(cond)) { // may be a constant
-        entryBlock = entryBlock->splitBasicBlockBefore(inst, "newEntry");
-      }
+    if (Instruction *inst = dyn_cast<Instruction>(cond)) { // may be a constant
+      entryBlock->splitBasicBlockBefore(inst, "newEntry");
     }
   }
-
-  else if (SwitchInst *sw = dyn_cast<SwitchInst>(term)) {
-    entryBlock = entryBlock->splitBasicBlockBefore(sw, "newEntry");
-  }
-
-  return entryBlock;
 }
 
 /**
 * @brief Iterates over basic blocks and dispatches them in a switch statement
 * @return LoadInst corresponding to the switchVar
 */
-static LoadInst* flatten(Function &F, std::vector<LoadInst*> oldLoads) {
+static LoadInst* flatten(Function &F) {
   Type *i32_type = Type::getInt32Ty(F.getContext());
 
   // Create switch variable on the stack
@@ -55,17 +46,12 @@ static LoadInst* flatten(Function &F, std::vector<LoadInst*> oldLoads) {
   LoadInst *load = new LoadInst(i32_type, switchVar, "switchVar", dispatcher);
   SwitchInst *sw = SwitchInst::Create(load, dispatcher, 0, dispatcher);
 
-  // Move older loadInsts to the new dispatcher to avoid scope issues
-  for (auto &oldLoad : oldLoads) {
-    oldLoad->moveBefore(dispatcher->getFirstNonPHI());
-  }
-
   // Add all non-terminating basic blocks to the switch
-  BasicBlock *EntryBlock = splitEntryBlock(&F.getEntryBlock());
+  splitEntryBlock(&F.getEntryBlock());
 
   int idx = 0;
   for (auto &B : F) {
-    if (&B == EntryBlock || &B == dispatcher) continue; // Skip entry and dispatcher blocks
+    if (&B == &F.getEntryBlock() || &B == dispatcher) continue; // Skip entry and dispatcher blocks
 
     // Create case variable
     ConstantInt *swIdx = dyn_cast<ConstantInt>(ConstantInt::get(i32_type, idx));
@@ -73,8 +59,6 @@ static LoadInst* flatten(Function &F, std::vector<LoadInst*> oldLoads) {
     sw->addCase(swIdx, &B);
     idx++;
   }
-
-  if (idx <= 1) return NULL; // Function too small to be flattened
 
   // Update branches to set switchVar conditionally
   // Unconditionally branch to the dispatcher block
@@ -114,30 +98,20 @@ namespace {
 struct FlattenCFGPass : public PassInfoMixin<FlattenCFGPass> {
 PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
 
-    // Create LowerSwitchPass instance
+    // Create LowerSwitchPass and RegToMem instances
     LowerSwitchPass *lower = new LowerSwitchPass();
+    RegToMemPass *reg = new RegToMemPass();
     FunctionAnalysisManager &FM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
-    // loadInsts created by flattening iterations
-    std::vector<LoadInst*> loadInstructions;
-
     for (auto &F : M.functions()) {
-      if (F.empty()) continue;
+      if (F.size() < 2) continue; // Function too small to be flattened
 
-      for(int i=0; i < 4; i++) {
-        errs() << "Running flatten on "<< F.getName() << "(iteration: " << i << ")\n";
+      errs() << "Running flatten on " << F.getName() << "\n";
 
-        // Remove all switch statements
-        lower->run(F, FM);
+      lower->run(F, FM); // Remove switch statements
+      reg->run(F, FM);   // Remove phi nodes
 
-        // Run our pass logic
-        LoadInst * load = flatten(F, loadInstructions);
-        if (load != NULL) {
-          loadInstructions.push_back(load);
-          Flattened++;
-        }
-        else break;
-      }
+      flatten(F); // Run the pass logic
     }
 
     return PreservedAnalyses::none();
