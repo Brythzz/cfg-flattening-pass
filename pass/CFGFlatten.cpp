@@ -1,11 +1,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/Transforms/Utils/LowerSwitch.h"
 #include "llvm/Transforms/Scalar/Reg2Mem.h"
-
-#define DEBUG_TYPE "flatten-cfg"
-STATISTIC(Flattened, "Number of functions flattened");
 
 using namespace llvm;
 
