@@ -26,7 +26,7 @@ static void splitEntryBlock(BasicBlock *entryBlock) {
 * @brief Iterates over basic blocks and dispatches them in a switch statement
 * @return LoadInst corresponding to the switchVar
 */
-static LoadInst* flatten(Function &F) {
+static LoadInst* flatten(Function &F, llvm::SmallVector<LoadInst *> oldLoads) {
   Type *i32_type = Type::getInt32Ty(F.getContext());
 
   // Create switch variable on the stack
@@ -41,6 +41,11 @@ static LoadInst* flatten(Function &F) {
   BasicBlock *dispatcher = BasicBlock::Create(F.getContext(), "dispatcher", &F);
   LoadInst *load = new LoadInst(i32_type, switchVar, "switchVar", dispatcher);
   SwitchInst *sw = SwitchInst::Create(load, dispatcher, 0, dispatcher);
+
+  // Move older loadInsts to the new dispatcher block to avoid scope issues
+  for (auto &oldLoad : oldLoads) {
+    oldLoad->moveBefore(dispatcher->getFirstNonPHI());
+  }
 
   // Add all non-terminating basic blocks to the switch
   splitEntryBlock(&F.getEntryBlock());
@@ -102,12 +107,18 @@ PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
     for (auto &F : M.functions()) {
       if (F.size() < 2) continue; // Function too small to be flattened
 
-      errs() << "Running flatten on " << F.getName() << "\n";
+      // Load instructions from prev. iterations
+      SmallVector<LoadInst *> oldLoads;
 
-      lower->run(F, FM); // Remove switch statements
-      reg->run(F, FM);   // Remove phi nodes
+      for (int i=0; i < 2; i++) {
+        errs() << "Running flatten on " << F.getName() << " (iteration: " << i << ")\n";
 
-      flatten(F); // Run the pass logic
+        lower->run(F, FM); // Remove switch statements
+        reg->run(F, FM);   // Remove phi nodes
+
+        LoadInst *load = flatten(F, oldLoads); // Run the pass logic
+        oldLoads.push_back(load);
+      }
     }
 
     return PreservedAnalyses::none();
