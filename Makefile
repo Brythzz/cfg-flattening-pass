@@ -9,7 +9,7 @@ gen_cfg: something.ll
 	rm -f .*.dot
 
 pass:
-	@cd build && make && cd ..
+	@cd build && make
 
 passll:
 	clang -fpass-plugin=`echo build/pass/FlattenCFGPass.*` something.c -emit-llvm -S -o something.ll

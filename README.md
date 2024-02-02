@@ -12,5 +12,9 @@ $ cd ..
 
 Run the pass
 ```sh
+# 1 iteration (default)
 $ clang -fpass-plugin=`echo build/pass/FlattenCFGPass.*` something.c
+
+# 3 iterations
+$ clang -fplugin=`echo build/pass/FlattenCFGPass.*` -fpass-plugin=`echo build/pass/FlattenCFGPass.*` something.c -mllvm -iterations=3
 ```

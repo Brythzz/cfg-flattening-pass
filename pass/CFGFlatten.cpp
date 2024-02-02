@@ -5,6 +5,8 @@
 
 using namespace llvm;
 
+static cl::opt<int> Iterations("iterations", cl::desc("Number of pass iterations to apply"), cl::init(1));
+
 /**
 * @brief Splits the entry block if it ends with a conditional branch
 * to make it unconditionally jump to the dispatcher
@@ -110,7 +112,7 @@ PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
       // Load instructions from prev. iterations
       SmallVector<LoadInst *> oldLoads;
 
-      for (int i=0; i < 2; i++) {
+      for (int i=0; i < Iterations; i++) {
         errs() << "Running flatten on " << F.getName() << " (iteration: " << i << ")\n";
 
         lower->run(F, FM); // Remove switch statements
